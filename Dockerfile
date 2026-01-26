@@ -1,7 +1,5 @@
-# Trixie doesn't work because it goes to python 3.13, which removes cgi, which web.py depends on
-# TODO: rewrite this all to use flask.  web.py is no longer maintained, it seems.
-FROM debian:bookworm-20251229 AS base
-MAINTAINER Rob Knop <raknop@lbl.gov>
+FROM debian:trixie-20260112 AS base
+LABEL maintainer="Rob Knop <raknop@lbl.gov>"
 
 # These next two are what's needed to run as raknop on NERSC.
 # If somebody else is isntalling this, they will need to specify
@@ -13,11 +11,24 @@ ARG GID=45703
 SHELL ["/bin/bash", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ="UTC"
+
 RUN apt-get update && apt-get upgrade -y \
-    && apt-get install -y less python3 python3-venv apache2 libapache2-mod-wsgi-py3 \
-       libcap2-bin net-tools netcat-openbsd lynx patch \
+    && apt-get install -y python3 locales netcat-openbsd net-tools lynx ca-certificates \
+                          tmux emacs-nox less \
+    && apt-get -y autoremove \
     && apt-get clean \
-    && rm -rf /var/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
+
+RUN cat /etc/locale.gen | perl -pe 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' > /etc/locale.gen.new \
+    && mv /etc/locale.gen.new /etc/locale.gen
+RUN locale-gen en_US.utf8
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+ENV LC_ALL=en_US.UTF-8
+
+RUN ln -s /usr/bin/python3 /usr/bin/python
+ENV LESS=-XLRi
 
 # ======================================================================
 # apt-getting pip installs a full dev environment, which we don't
@@ -25,13 +36,23 @@ RUN apt-get update && apt-get upgrade -y \
 
 FROM base AS build
 
-RUN apt-get update && apt-get install -y python3-pip
+RUN apt-get update && apt-get install -y python3-pip python3-venv
 
 RUN mkdir /venv
 RUN python3 -mvenv /venv
 
 RUN source /venv/bin/activate \
-  && pip install web.py
+  && pip --no-cache install \
+      "flask-session>=0.8.0,<1.0.0" \
+      "flask>=3.1.2,<4.0.0" \
+      "gevent>=25.9.1,<26.0.0" \
+      "gunicorn>=24.1.1,<25.0.0" \
+      "pytest-timestamper==0.0.10" \
+      "pytest>=8.4.2,<9.0.0" \
+      "remote-pdb==2.1.0" \
+      "requests>=2.32.5,<3.0.0"
+
+ENTRYPOINT [ "tail", "-f", "/etc/issue" ]
 
 # ======================================================================
 
@@ -40,44 +61,25 @@ FROM base AS final
 COPY --from=build /venv/ /venv/
 ENV PATH=/venv/bin:$PATH
 
-# This needs to get replaced with a bind mound at runtime
+# Both /secrets and /dest should be bind-mounted at runtime.
+# Do NOT use the default values here.
 RUN mkdir /secrets
 RUN echo "testing testing" >> /secrets/connector_tokens
+RUN echo "insecure" >> /secrets/flask_secret_key
 RUN mkdir /dest
 
-RUN /sbin/setcap 'cap_net_bind_service=+ep' /usr/sbin/apache2
+RUN mkdir /file-archive-server
+COPY file_archive_server.py /file-archive-server/file_archive_server.py
+ENV PYTHONPATH /file-archive-server
 
-RUN ln -s ../mods-available/socache_shmcb.load /etc/apache2/mods-enabled/socache_shmcb.load
-RUN ln -s ../mods-available/ssl.load /etc/apache2/mods-enabled/ssl.load
-RUN ln -s ../mods-available/ssl.conf /etc/apache2/mods-enabled/ssl.conf
-RUN ln -s ../mods-available/rewrite.load /etc/apache2/mods-enabled/rewrite.load
-RUN rm /etc/apache2/sites-enabled/000-default.conf
-RUN echo "Listen 8080" > /etc/apache2/ports.conf
-COPY connector.conf /etc/apache2/sites-available/
-RUN ln -s ../sites-available/connector.conf /etc/apache2/sites-enabled/connector.conf
-
-# Patches
-RUN mkdir patches
-COPY ./patches/* patches/
-RUN patch -p1 /etc/apache2/mods-available/mpm_event.conf < ./patches/mpm_event.conf_patch
-RUN rm -rf patches
-
-# Do scary permissions stuff since we'll have to run
-#  as a normal user.  But, given that we're running as
-#  a normal user, that makes this less scary.
-RUN mkdir -p /var/run/apache2
-RUN chmod a+rwx /var/run/apache2
-RUN mkdir -p /var/lock/apache2
-RUN chmod a+rwx /var/lock/apache2
-RUN chmod -R a+rx /etc/ssl/private
-RUN mkdir -p /var/log/apache2
-RUN chmod -R a+rwx /var/log/apache2
-RUN chown $UID:$GID /dest
-
-COPY connector.py /var/www/html/
+RUN mkdir /sessions
 
 USER $UID:$GID
-RUN apachectl start
 
-CMD [ "apachectl", "-D", "FOREGROUND", "-D", "APACHE_CONFDIR=/etc/apache2" ]
-#CMD "/bin/bash"
+EXPOSE 8080
+ENTRYPOINT [ "/venv/bin/gunicorn", "-b", "0.0.0.0:8080", "-k", "gevent", \
+             "--timeout", "300", "--workers", "10", \
+             "file_archive_server:application" ]
+# ENTRYPOINT [ "/venv/bin/gunicorn", "-b", "0.0.0.0:8080", "-k", "gevent", \
+#              "--timeout", "300", "--workers", "1", \
+#              "file_archive_server:application" ]

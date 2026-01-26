@@ -1,6 +1,6 @@
 services:
   make-archive-directories:
-    image: rknop/upload-connector:tests
+    image: rknop/file-archive-server:tests
     build:
       context: ../
       args:
@@ -11,12 +11,12 @@ services:
         source: archive-storage
         target: /storage
     entrypoint: bash -c "mkdir -p /storage/base && chmod a+rwx /storage/base"
-        
+
   archive-server:
     depends_on:
       make-archive-directories:
         condition: service_completed_successfully
-    image: rknop/upload-connector:tests
+    image: rknop/file-archive-server:tests
     build:
       context: ../
       args:
@@ -30,6 +30,7 @@ services:
     environment:
       - CONNECTOR_READ_STORAGE=/storage_ro/base
       - CONNECTOR_WRITE_STORAGE=/storage/base
+      - CONNECTOR_SECRETS=/run/secrets
     volumes:
       - type: volume
         source: archive-storage
@@ -40,15 +41,20 @@ services:
         read_only: true
     secrets:
       - connector_tokens
+      - flask_secret_key
+    # Uncomment this if needed for debugging
+    # entrypoint: [ "tail", "-f", "/etc/issue" ]
 
-  shellhost:
+  shell:
     depends_on:
       archive-server:
         condition: service_healthy
-    image: rknop/upload-connector-test:tests
+    image: rknop/file-archive-server-test:tests
     build:
-      context: ./
-      dockerfile: Dockerfile
+      context: ../
+      args:
+        UID: 0
+        GID: 0
     volumes:
       - type: bind
         source: ..
@@ -68,10 +74,12 @@ services:
     depends_on:
       archive-server:
         condition: service_healthy
-    image: rknop/upload-connector-test:tests
+    image: rknop/file-archive-server-test:tests
     build:
-      context: ./
-      dockerfile: Dockerfile
+      context: ../
+      args:
+        UID: 0
+        GID: 0
     volumes:
       - type: bind
         source: ..
@@ -88,10 +96,12 @@ services:
     working_dir: /archive/tests
     entrypoint: [ "pytest", "-v" ]
 
-    
+
 secrets:
   connector_tokens:
     file: connector_tokens.txt
+  flask_secret_key:
+    file: flask_secret_key.txt
 
 volumes:
   archive-storage:

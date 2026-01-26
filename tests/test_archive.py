@@ -99,7 +99,9 @@ class ArchiveTestBase:
         try:
             archive.upload( filepath, serverpath.parent, serverpath.name, overwrite=False )
         except Exception as ex:
-            match = re.search( '^Failed to (copy|upload), .* already exists on archive and overwrite was False$',
+            match = re.search( r"^Error response from .*: Can't upload .*, the file .* already exists "
+                               r"and overwrite is False|"
+                               r"^Failed to copy, .* already exists on archive and overwrite was False",
                                str(ex) )
             assert match is not None
         else:

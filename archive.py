@@ -208,7 +208,7 @@ class Archive:
                 self.logger.warning( f"Got exception {ex} trying to contact {url} with data {data}" )
             else:
                 if res.status_code != 200:
-                    self.logger.warning( f"Got status_code={res.status_code} from {url} with data {data}" )
+                    self.logger.warning( f"Got status_code={res.status_code} from {url} with data {data} : {res.text}" )
                 elif isjson:
                     if res.headers['content-type'] != 'application/json':
                         self.logger.warning( f"Server returned {res.headers['content-type']}, expected json" )
@@ -227,8 +227,9 @@ class Archive:
                                     raise RuntimeError( f"Invalid token for archive server" )
                                 else:
                                     tb = resval['traceback'] if 'traceback' in resval else '(No traceback)'
-                                    self.logger.warning( f"Got error response {resval['error']} from {url} "
-                                                         f"with data {data}\n{tb}" )
+                                    self.logger.error( f"Got error response {resval['error']} from {url} "
+                                                       f"with data {data}\n{tb}" )
+                                    raise RuntimeError( f"Error response from {url}: {resval['error']}" )
                             else:
                                 return resval
                 elif downloadfile is not None:
