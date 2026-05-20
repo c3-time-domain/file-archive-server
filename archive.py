@@ -6,6 +6,11 @@ import json
 import shutil
 import time
 import os
+import functools
+
+
+class _SleptTooLongError( RuntimeError ):
+    pass
 
 
 class Archive:
@@ -32,6 +37,7 @@ class Archive:
                   local_write_dir=None,
                   sleeptime=2,
                   retries=5,
+                  lockfunc=None,
                   logger=logging.getLogger("main") ):
         """Construct an Archive object.
 
@@ -77,6 +83,20 @@ class Archive:
 
           retries : int, default 5
             Number of times to retry if there's a communications failure.
+
+          lockfunc : callable or None
+            If not None, must be a function that takes a single string
+            argument (the server path), plus an optional positional
+            boolean argument unlock.  The function will do whatever is
+            necessary to get an exclusive lock on whatever resource is
+            associated with that string argument.  When called with
+            unlock, it releases that lock.  Used in an attempt to deal
+            with multiple processes trying to download the same file all
+            at once.  If nothing is given, than use an imperfect
+            built-in implenetation that still has some race conditions
+            left.  (Actually, that's not implemented yet, so the current
+            default is a null-op!)
+
 
           logger : logging.Logger
              Defaults to getting the logger "main".
@@ -127,6 +147,8 @@ class Archive:
         if ( self.local_write_dir is None ) and ( self.local_read_dir is not None ):
             self.local_write_dir = self.local_read_dir
         self.sleeptime = sleeptime
+        self.lockfunc = ( lockfunc if lockfunc is not None else
+                          functools.partial( self.__class__._lockfunc, self ) )
         self.retries = retries
         self.verify_cert = verify_cert
 
@@ -449,6 +471,16 @@ class Archive:
 
         return True
 
+
+    # ======================================================================
+
+    def _lockfunc( self, filepath, unlock=False ):
+        if not unlock:
+            self.logger.warning( "No lockfunc supplied, not dealing with race conditions of multiple "
+                                 "processes download the same file at the same time." )
+        # TODO... write something
+
+
     # ======================================================================
 
     def download( self, serverpath, localpath, verifymd5=False, clobbermismatch=True, mkdir=True ):
@@ -490,75 +522,82 @@ class Archive:
         localpath = pathlib.Path( localpath )
         if mkdir:
             localpath.parent.mkdir( parents=True, exist_ok=True )
-        localmd5 = None
-        if localpath.exists():
-            if not localpath.is_file():
-                raise RuntimeError( f"{localpath} exists but isn't a regular file!" )
-            elif not verifymd5:
-                return True
-            md5 = hashlib.md5()
-            with open( localpath, "rb" ) as ifp:
-                md5.update( ifp.read() )
-            localmd5 = md5.hexdigest()
 
-        serverpath = self.path_base / serverpath
+        try:
+            self.lockfunc( str(serverpath) )
 
-        finished = False
-
-        if self.local_read_dir is not None:
-            srcpath = pathlib.Path( self.local_read_dir ) / serverpath
-            if not srcpath.exists():
-                raise FileNotFoundError( f"Could not find archive file {serverpath}" )
-            md5 = hashlib.md5()
-            with open( srcpath, "rb" ) as ifp:
-                md5.update( ifp.read() )
-            md5sum = md5.hexdigest()
-
-            if ( localmd5 is not None ) and ( localmd5 != md5sum ):
-                if clobbermismatch:
-                    localpath.unlink()
-                else:
-                    raise RuntimeError( "Local file {localpath} exists but md5sum doesn't match "
-                                        "{srcpath} on archive; local={localmd5}, archive={md5sum}" )
-
-            # If we get this far and localfile exists, then we know we don't want to overwrite it
-            if not localpath.exists():
-                shutil.copy2( self.local_read_dir / serverpath, localpath )
+            localmd5 = None
+            if localpath.exists():
+                if not localpath.is_file():
+                    raise RuntimeError( f"{localpath} exists but isn't a regular file!" )
+                elif not verifymd5:
+                    return True
                 md5 = hashlib.md5()
                 with open( localpath, "rb" ) as ifp:
                     md5.update( ifp.read() )
                 localmd5 = md5.hexdigest()
-                if localmd5 != md5sum:
-                    localpath.unlink()
-                    raise RuntimeError( "Error copying from archive {serverpath} to {localpath}; "
-                                        "md5sum mismatch: archive {md5sum}, local {md5.hexdigest()}" )
-            finished = True
 
-        if ( not finished ) and ( self.url is None ):
-            raise RuntimeError( "Haven't been able to copy file from local archive, and there's no url!" )
+            serverpath = self.path_base / serverpath
 
-        if not finished:
-            data = { "path": str(serverpath), "token": self.token }
-            resval = self._retry_request( "getfileinfo", data=data )
-            md5sum = resval['md5sum']
-            if localmd5 is not None:
-                if localmd5 != md5sum:
+            finished = False
+
+            if self.local_read_dir is not None:
+                srcpath = pathlib.Path( self.local_read_dir ) / serverpath
+                if not srcpath.exists():
+                    raise FileNotFoundError( f"Could not find archive file {serverpath}" )
+                md5 = hashlib.md5()
+                with open( srcpath, "rb" ) as ifp:
+                    md5.update( ifp.read() )
+                md5sum = md5.hexdigest()
+
+                if ( localmd5 is not None ) and ( localmd5 != md5sum ):
                     if clobbermismatch:
                         localpath.unlink()
                     else:
-                        raise RuntimeError( f"Local file {localpath} exists but md5sum doesn't match "
-                                            f"{serverpath} on archive; local={localmd5}, server={md5sum}" )
+                        raise RuntimeError( "Local file {localpath} exists but md5sum doesn't match "
+                                            "{srcpath} on archive; local={localmd5}, archive={md5sum}" )
 
-            # If we get this far and localpath exists, we know we're done
-            if not localpath.exists():
-                self._retry_request( "download", data=data, isjson=False, downloadfile=localpath )
-                md5 = hashlib.md5()
-                with open( localpath, "rb" ) as ifp:
-                    md5.update( ifp.read() )
-                localmd5 = md5.hexdigest()
-                if md5sum != localmd5:
-                    localpath.unlink()
-                    raise RuntimeError( f"Failed to download archive file {serverpath} to {localpath}; "
-                                        f"local md5sum {md5.hexdigest()} did not match server's {md5sum}" )
+                # If we get this far and localfile exists, then we know we don't want to overwrite it
+                if not localpath.exists():
+                    shutil.copy2( self.local_read_dir / serverpath, localpath )
+                    md5 = hashlib.md5()
+                    with open( localpath, "rb" ) as ifp:
+                        md5.update( ifp.read() )
+                    localmd5 = md5.hexdigest()
+                    if localmd5 != md5sum:
+                        localpath.unlink()
+                        raise RuntimeError( "Error copying from archive {serverpath} to {localpath}; "
+                                            "md5sum mismatch: archive {md5sum}, local {md5.hexdigest()}" )
+                finished = True
 
-        return True
+            if ( not finished ) and ( self.url is None ):
+                raise RuntimeError( "Haven't been able to copy file from local archive, and there's no url!" )
+
+            if not finished:
+                data = { "path": str(serverpath), "token": self.token }
+                resval = self._retry_request( "getfileinfo", data=data )
+                md5sum = resval['md5sum']
+                if localmd5 is not None:
+                    if localmd5 != md5sum:
+                        if clobbermismatch:
+                            localpath.unlink()
+                        else:
+                            raise RuntimeError( f"Local file {localpath} exists but md5sum doesn't match "
+                                                f"{serverpath} on archive; local={localmd5}, server={md5sum}" )
+
+                # If we get this far and localpath exists, we know we're done
+                if not localpath.exists():
+                    self._retry_request( "download", data=data, isjson=False, downloadfile=localpath )
+                    md5 = hashlib.md5()
+                    with open( localpath, "rb" ) as ifp:
+                        md5.update( ifp.read() )
+                    localmd5 = md5.hexdigest()
+                    if md5sum != localmd5:
+                        localpath.unlink()
+                        raise RuntimeError( f"Failed to download archive file {serverpath} to {localpath}; "
+                                            f"local md5sum {md5.hexdigest()} did not match server's {md5sum}" )
+
+            return True
+
+        finally:
+            self.lockfunc( str(serverpath), unlock=True )
