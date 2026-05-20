@@ -5,8 +5,8 @@ import requests
 import json
 import shutil
 import time
-import re
 import os
+
 
 class Archive:
     """A class for communcation with an archive.
@@ -200,22 +200,29 @@ class Archive:
                 if filepath is not None:
                     ifp = open( filepath, "rb" )
                     files = { "fileinfo": ifp }
+                self.logger.debug( f"Archive posting to {url} with filepath {filepath} and data {data}" )
+                sendtime = time.perf_counter()
                 res = requests.post( f"{url}", data=data, files=files, verify=self.verify_cert )
                 if ifp is not None:
                     ifp.close()
                     ifp = None
             except Exception as ex:
-                self.logger.warning( f"Got exception {ex} trying to contact {url} with data {data}" )
+                dt = time.perf_counter() - sendtime
+                self.logger.warning( f"Got exception {ex} after {dt:.2fs} trying to contact {url} with data {data}" )
             else:
+                dt = time.perf_counter() - sendtime
                 if res.status_code != 200:
-                    self.logger.warning( f"Got status_code={res.status_code} from {url} with data {data} : {res.text}" )
+                    self.logger.warning( f"Got status_code={res.status_code} from {url} after {dt:.2f}s "
+                                         f"with data {data} : {res.text}" )
                 elif isjson:
                     if res.headers['content-type'] != 'application/json':
-                        self.logger.warning( f"Server returned {res.headers['content-type']}, expected json" )
+                        self.logger.warning( f"Server returned {res.headers['content-type']} after {dt:.2f}s, "
+                                             f"expected json" )
                     else:
                         try:
                             resval = json.loads( res.text )
-                        except Exception as ex:
+                            self.logger.debug( f"Got successful response from {url} after {dt:.2f}s: {resval}" )
+                        except Exception:
                             self.logger.warning( f"Failed to load JSON from {res.text}" )
                         else:
                             if "error" in resval:
@@ -224,7 +231,7 @@ class Archive:
                                     return None
                                 if resval['error'][0:13] == 'Invalid token':
                                     self.logger.error( f"Invalid token for {url}" )
-                                    raise RuntimeError( f"Invalid token for archive server" )
+                                    raise RuntimeError( "Invalid token for archive server" )
                                 else:
                                     tb = resval['traceback'] if 'traceback' in resval else '(No traceback)'
                                     self.logger.error( f"Got error response {resval['error']} from {url} "
@@ -233,6 +240,7 @@ class Archive:
                             else:
                                 return resval
                 elif downloadfile is not None:
+                    self.logger.debug( f"Got {len(res.content)} bytes of download back from {url} after {dt:.2f}s" )
                     if res.headers['content-type'] != 'application/octet-stream':
                         self.logger.warning( f"Server returned {res.headers['content-type']}, "
                                              f"expected an octet stream" )
@@ -342,7 +350,7 @@ class Archive:
                      "token": self.token,
                      "size": localsize,
                      "md5sum": localmd5 }
-            resval = self._retry_request( f"upload", data=data, filepath=localpath,
+            resval = self._retry_request( "upload", data=data, filepath=localpath,
                                           expectederror='File already exists' )
             if ( resval is None ) and ( not overwrite ):
                 raise RuntimeError( f"Failed to upload, {serverpath} already exists on archive "
@@ -386,7 +394,7 @@ class Archive:
             if not archivepath.exists():
                 return None
             if not archivepath.is_file():
-                raise RuntimeError( f"Archive file {architepath} exists but is not a regular file!" )
+                raise RuntimeError( f"Archive file {archivepath} exists but is not a regular file!" )
             md5 = hashlib.md5()
             with open( archivepath, "rb" ) as ifp:
                 md5.update( ifp.read() )
@@ -531,7 +539,7 @@ class Archive:
 
         if not finished:
             data = { "path": str(serverpath), "token": self.token }
-            resval = self._retry_request( f"getfileinfo", data=data )
+            resval = self._retry_request( "getfileinfo", data=data )
             md5sum = resval['md5sum']
             if localmd5 is not None:
                 if localmd5 != md5sum:
@@ -543,7 +551,7 @@ class Archive:
 
             # If we get this far and localpath exists, we know we're done
             if not localpath.exists():
-                self._retry_request( f"download", data=data, isjson=False, downloadfile=localpath )
+                self._retry_request( "download", data=data, isjson=False, downloadfile=localpath )
                 md5 = hashlib.md5()
                 with open( localpath, "rb" ) as ifp:
                     md5.update( ifp.read() )
