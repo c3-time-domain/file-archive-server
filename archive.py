@@ -230,7 +230,7 @@ class Archive:
                     ifp = None
             except Exception as ex:
                 dt = time.perf_counter() - sendtime
-                self.logger.warning( f"Got exception {ex} after {dt:.2fs} trying to contact {url} with data {data}" )
+                self.logger.warning( f"Got exception {ex} after {dt:.2f}s trying to contact {url} with data {data}" )
             else:
                 dt = time.perf_counter() - sendtime
                 if res.status_code != 200:
