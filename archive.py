@@ -7,6 +7,7 @@ import shutil
 import time
 import os
 import functools
+import multiprocessing
 
 
 class _SleptTooLongError( RuntimeError ):
@@ -483,7 +484,7 @@ class Archive:
 
     # ======================================================================
 
-    def download( self, serverpath, localpath, verifymd5=False, clobbermismatch=True, mkdir=True ):
+    def download( self, serverpath, localpath, verifymd5=False, clobbermismatch=True, mkdir=True, sleeptest=None ):
         """Copy a file from the archive to local storage.
 
         Parmaeters
@@ -513,6 +514,9 @@ class Archive:
             it.  (If you set this to fall, the function might error
             out.)
 
+          sleeptest : float or None
+            Here for testing lock functionality; generally don't use this
+
         Returns
         -------
           True if succesful, otherwise raises an exception.
@@ -525,6 +529,8 @@ class Archive:
 
         try:
             self.lockfunc( str(serverpath) )
+            if sleeptest is not None:
+                time.sleep( sleeptest )
 
             localmd5 = None
             if localpath.exists():
