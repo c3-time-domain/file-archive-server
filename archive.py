@@ -523,6 +523,7 @@ class Archive:
 
         """
 
+        serverpath = self.path_base / serverpath
         localpath = pathlib.Path( localpath )
         if mkdir:
             localpath.parent.mkdir( parents=True, exist_ok=True )
@@ -530,7 +531,9 @@ class Archive:
         try:
             self.lockfunc( str(serverpath) )
             if sleeptest is not None:
+                self.logger.warning( f"lockfunc called; sleeping {sleeptest}s for testing purposes..." )
                 time.sleep( sleeptest )
+                self.logger.warning( "...done sleeping, proceeding with download" )
 
             localmd5 = None
             if localpath.exists():
@@ -543,7 +546,6 @@ class Archive:
                     md5.update( ifp.read() )
                 localmd5 = md5.hexdigest()
 
-            serverpath = self.path_base / serverpath
 
             finished = False
 
