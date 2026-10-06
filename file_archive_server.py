@@ -24,7 +24,7 @@ def setup_flask_app( application ):
     global pathregex
     global nodotfiles
 
-    pathregex = re.compile( r"^[0-9a-zA-Z-_=/\.\$\: ]+$" )
+    pathregex = re.compile( r"^[0-9a-zA-Z-_=/\.\$\:\+ ]+$" )
     nodotfiles = re.compile( r"^\.|/\." )
 
     noparent = re.compile( r"(^\.\./)|(/\.\.)" )
@@ -133,7 +133,7 @@ class BaseView( flask.views.View ):
                 raise Failure( "No path specified." )
             if ( not pathregex.search( self.data["path"] ) ) or ( nodotfiles.search( self.data["path"] ) ):
                 raise Failure( f"Invalid path {self.data['path']}, filenames can only include "
-                               f"0-9, a-z, A-Z, -, _, =, $, ., :, and /.  Dot files aren't allowed." )
+                               f"0-9, a-z, A-Z, +, -, _, =, $, ., :, and /.  Dot files aren't allowed." )
             if self.data["token"] is None:
                 raise Failure( "No token specified." )
             ok = False
